@@ -42,5 +42,4 @@ Model parameters are in `PARAMS` of `kinect_sim.py`. Multipath, saturation and I
 
 ## Other
 - `preview_tour.py`, `lighttour_sheet.py` – quick low-res light-tour preview / key-frame sheet
-- `render_vggt.sh/.py`, `render_sampled.sh/.py` – earlier mono VGGT pipeline (render → video → zip → Baidu → QQ)
-- `qq_notify.py`, `qq_send_files.py` – local QQ bot notifications (machine-specific, read credentials from local config)
+- `render_vggt.sh/.py`, `render_sampled.sh/.py` – earlier mono VGGT pipeline (render → video → zip → Baidu)

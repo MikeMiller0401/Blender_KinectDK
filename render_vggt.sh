@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# VGGT 数据集：抽帧渲染（RGB+深度+相机参数）→ 合成视频 → 分包压缩 → 上传百度网盘 → QQ 发视频
+# VGGT 数据集：抽帧渲染（RGB+深度+相机参数）→ 合成视频 → 分包压缩 → 上传百度网盘
 # 用法：render_vggt.sh [输出目录]   重跑同一目录会跳过已渲染的帧；渲染设置取自 apartment.blend
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -16,7 +16,7 @@ echo "输出目录：$OUT"
   | tee "$OUT/render.log" | grep --line-buffered -E '^(GPU|PROGRESS)|Error|error:'
 [ "$(python3 -c "import json;print(json.load(open('$OUT/render_status.json'))['state'])")" = rendered ]
 
-# 抽帧后按 24 fps 播放（约原速 10 倍的快速预览）；QQ 用 yuv420p 保证兼容
+# 抽帧后按 24 fps 播放（约原速 10 倍的快速预览）；yuv420p 保证播放兼容
 ffmpeg -y -loglevel error -framerate 24 -pattern_type glob -i "$OUT/frames/*.png" \
   -c:v libx264 -crf 20 -preset slow -pix_fmt yuv420p -movflags +faststart "$OUT/$NAME.mp4"
 ffprobe -v error -count_frames -select_streams v:0 \
@@ -34,7 +34,4 @@ baiduyun mkdir "$REMOTE" || true
 baiduyun upload "$OUT/${NAME}_rgb.zip" "$OUT/${NAME}_depth.zip" "$OUT/$NAME.mp4" "$REMOTE"
 baiduyun ls "$REMOTE"
 
-/usr/bin/python3 -I "$HERE/qq_send_files.py" \
-  "【渲染】apartment VGGT 抽帧完成（Cam_MirrorTour，每 ${STEP} 帧取 1 帧，1600×1000）。图片包已上传：$REMOTE" \
-  "$OUT/$NAME.mp4"
 echo "全部完成"

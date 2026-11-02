@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 抽帧渲染 apartment → 合成视频 → 打包 → 上传百度网盘 → QQ 通知
+# 抽帧渲染 apartment → 合成视频 → 打包 → 上传百度网盘
 # 用法：[CAMERA=相机名] render_sampled.sh [输出目录]   重跑同一目录会跳过已渲染的帧
 #       不设 CAMERA 时用文件里的活动相机
 set -euo pipefail
@@ -33,5 +33,4 @@ baiduyun mkdir "$REMOTE" || true
 baiduyun upload "$OUT/$NAME.zip" "$REMOTE"
 baiduyun meta "$REMOTE/$NAME.zip"
 
-/usr/bin/python3 -I "$HERE/qq_notify.py" "apartment 抽帧渲染完成并已上传：$REMOTE/$NAME.zip（$(du -h "$OUT/$NAME.zip" | cut -f1)）"
 echo "全部完成"
