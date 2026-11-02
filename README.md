@@ -46,7 +46,7 @@ Per view: `depth.png` (uint16 mm, 0 = invalid), `ir.png`, `depth_gt.png`, `depth
 Model parameters are in `PARAMS` of `kinect_sim.py`. Multipath, saturation and IR noise are still estimates.
 
 Kitchen test (4 views). Columns: DK colour, simulated IR, GT depth, simulated depth, error, invalid reason.
-Bottom row: our real DK for reference (wall IR at 0.33 m, office depth).
+Bottom row: our real DK for reference (office, IR and depth from the same frame; RGB omitted, face blurred).
 
 ![Azure Kinect DK simulation](docs/kinect_dk_preview.jpg)
 

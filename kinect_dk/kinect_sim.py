@@ -14,6 +14,7 @@
 """
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -221,17 +222,24 @@ def preview(out, results, real_root):
         rv[(r['reason'] == 0) & r['mask']] = (90, 90, 90)
         rows.append([tile(colour), tile(irv), tile(colour_depth(r['gt'])), tile(colour_depth(r['depth'])), tile(errv), tile(rv)])
         titles.append(f"{name}: valid {stats['valid_in_mask']:.0%}, median |err| {stats['abs_err_median_mm']:.1f} mm")
-    # 真机参考：test 序列（办公室，近静止）
+    # 真机参考：test 序列（办公室，近静止）同一帧的彩色、红外、深度
+    # 导出目录里没有 test 的红外，直接从录像 MKV 的 IR 轨（第 3 路流）解码同一帧；与模拟红外同一显示比例
     real = sorted((real_root / 'test_pyk4a_export' / 'depth_raw').glob('*.npy'))
     if real:
-        d = np.load(real[50])
-        rgb = cv2.imread(str(sorted((real_root / 'test_pyk4a_export' / 'rgb_raw').glob('*.png'))[50]))
-        wall_ir = sorted((real_root / 'dry_pyk4a_export' / 'ir_raw').glob('*.npy'))
-        irr = np.load(wall_ir[100]).astype(np.float32) if wall_ir else np.zeros_like(d, np.float32)
-        irr = cv2.cvtColor(np.clip((irr / 8000.0) ** 0.5 * 255, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+        fi = 50
+        d = np.load(real[fi])
+        rgb = cv2.imread(str(sorted((real_root / 'test_pyk4a_export' / 'rgb_raw').glob('*.png'))[fi]))
+        mkv = real_root.parent / 'video' / 'test_pyk4a.mkv'
+        irr = np.zeros_like(d, np.float32)
+        if mkv.exists():
+            raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(mkv), '-map', '0:2', '-vf', f'select=eq(n\\,{fi})',
+                                  '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'gray16le', '-'],
+                                 capture_output=True, check=True).stdout
+            irr = np.frombuffer(raw, np.uint16).reshape(d.shape).astype(np.float32)
+        irr = cv2.cvtColor(np.clip((irr / 1500.0) ** 0.5 * 255, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
         blank = np.zeros((360, 400, 3), np.uint8)
         rows.append([tile(rgb), tile(irr), blank, tile(colour_depth(d)), blank, blank])
-        titles.append(f'REAL Azure Kinect DK (our device): office RGB / wall IR at 0.33 m / office depth, invalid {(d == 0)[np.load(HERE / "dk_params.npz")["mask"]].mean():.0%} in mask')
+        titles.append(f'REAL Azure Kinect DK (our device), office, same frame: RGB / IR / depth, invalid {(d == 0)[np.load(HERE / "dk_params.npz")["mask"]].mean():.0%} in mask')
     head = ['DK colour (720p)', 'Simulated IR', 'GT depth', 'Simulated depth', 'Error (±20 mm)', 'Invalid reason']
     th, rh = 34, 26
     sheet = np.full((th + len(rows) * (360 + rh) + 40, 2400, 3), 24, np.uint8)
