@@ -1,0 +1,7 @@
+# 渲染输出（体积大，另存百度网盘）
+/*_20[0-9][0-9]*/
+/kinect_dk/test_*/
+__pycache__/
+*.exr
+*.blend
+*.blend1

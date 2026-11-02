@@ -1,0 +1,5 @@
+scannet200_constants.py       https://raw.githubusercontent.com/ScanNet/ScanNet/master/BenchmarkScripts/ScanNet200/scannet200_constants.py
+scannetv2-labels.combined.tsv 官方随数据集分发，未放在 ScanNet 仓库；取自 Pointcept 镜像
+  https://raw.githubusercontent.com/Pointcept/Pointcept/main/pointcept/datasets/preprocessing/scannet/meta_data/scannetv2-labels.combined.tsv
+  已与 mmdetection3d、votenet 两个镜像逐行比对：549 行一致（仅 id 1163 的 raw_category 列不同：object 与 stick；该行即 ScanNet200 的 object 类，ID 与 nyu40=40 otherprop 三份一致，不影响映射）
+下载日期 2026-10-29；仅作数据解析，不执行
