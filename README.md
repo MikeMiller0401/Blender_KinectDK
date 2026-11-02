@@ -26,6 +26,11 @@ Per frame and eye (`_L`/`_R`): `frames/` RGB, `depth/` Z-depth EXR (m), `normal/
 `albedo/`, `shading/`, `instance/`, `passes/` (raw light passes + per-room light groups),
 `scenario/` (lights-off composite); plus `cameras.json` (K, c2w Blender, w2c OpenCV), `labels.json`, `lighting.json`.
 
+Example: left RGB and `semantic_scannet200/` (frames 1075 / 2025 / 2690). Mirrors are labelled as `mirror` as a whole,
+reflected content is not segmented.
+
+![ScanNet200 segmentation](docs/scannet200_segmentation.jpg)
+
 ## Azure Kinect DK simulation (`kinect_dk/`)
 Calibrated from a real DK (NFOV unbinned 640×576 + 720p color; factory calibration in `factory_calibration.json`).
 ```bash
