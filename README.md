@@ -45,6 +45,11 @@ Per view: `depth.png` (uint16 mm, 0 = invalid), `ir.png`, `depth_gt.png`, `depth
 `invalid_reason.png` (1 outside FoV, 2 low signal, 3 saturated, 4 edge, 5 multipath, 6 glass); `rig.json` has K, distortion, extrinsics.
 Model parameters are in `PARAMS` of `kinect_sim.py`. Multipath, saturation and IR noise are still estimates.
 
+Kitchen test (4 views). Columns: DK colour, simulated IR, GT depth, simulated depth, error, invalid reason.
+Bottom row: our real DK for reference (wall IR at 0.33 m, office depth).
+
+![Azure Kinect DK simulation](docs/kinect_dk_preview.jpg)
+
 ## Other
 - `preview_tour.py`, `lighttour_sheet.py` – quick low-res light-tour preview / key-frame sheet
 - `render_vggt.sh/.py`, `render_sampled.sh/.py` – earlier mono VGGT pipeline (render → video → zip → Baidu)
