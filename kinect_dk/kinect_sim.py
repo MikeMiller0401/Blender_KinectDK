@@ -5,12 +5,15 @@
   ir.png              模拟主动红外图，uint16
   depth_gt.png        同视角干净深度真值，uint16 毫米（只去掉六边形外）
   depth_to_color.png  模拟深度投影到彩色相机 1280×720，uint16 毫米
-  invalid_reason.png  uint8：0 有效 1 照明区外 2 信号弱 3 过曝 4 边缘混合像素 5 多路径 6 玻璃镜面反射
+  invalid_reason.png  uint8：0 有效 1 照明区外 2 信号弱 3 过曝 4 边缘混合像素 6 玻璃/镜子正对发射器的镜面亮斑
 模型（参数见 PARAMS，写入 sim_params.json）：
   红外信号 S = k · E(u,v) · I，I 为只开相机处点光源时 Cycles 的辐亮度（换算到 ρ·cos/r² 单位），
   漫反射部分按类别把可见光反照率换成 850 nm 反射率；k 与照度分布 E 由 calibrate_dk.py 用真机墙面标定。
   深度噪声 σ = sqrt(σ0² + σ1² · S_ref / S)，S_ref 为 1 m 处正对的 ρ=0.5 平面；与真机 test 序列的时间噪声核对。
-  多路径：按相量抵消后的间接光比例给出偏差（漫反射间接光大部分在高调制频率下抵消）；玻璃：ToF 透过玻璃测到后方，近乎正对时镜面反射过曝。
+  内凹棱角：真机（DK_recorder 墙角，0.5–0.6 m）测得比几何更近、全部有效，偏差随到棱线的距离指数衰减。
+  玻璃：ToF 透过玻璃测到后方；镜子：测到虚像（沿反射展开的总路程），信号按往返路程与镜面反射率估计；
+  两者近乎正对时发射器的镜面反射过曝（真机亮斑半径约 20 px）。
+  无效判据：低信号概率曲线按真机 test 序列，过曝阈值按 test 与 DK_recorder 录像（约 20000 DN）。
 """
 import argparse
 import json
@@ -29,21 +32,26 @@ from dk_common import undistort  # noqa: E402
 PARAMS = {
     'sigma0_mm': 0.5,             # 基础噪声
     'sigma1_mm': 1.0,             # 参考信号下的散粒噪声项（1 m、正对、ρ=0.5）
-    'low_signal_ratio': [1 / 400, 1 / 150],   # S/S_ref 低于前者必无效，介于两者之间按概率无效
-    'saturation': 14000,          # 红外过曝阈值（假设值）
+    # 有效概率 = 1 / (1 + (ir50 / IR)^slope)，IR 为红外信号（DN）；按标定 k 的同一台真机 test 序列拟合：
+    # IR 0–10 → 3%，10–20 → 17%，20–40 → 48%，40–60 → 81%，100–150 → 95%（新设备墙面录像低 IR 像素都在视场边缘，不采用）
+    'low_signal_ir50': 28.0,
+    'low_signal_slope': 2.5,
+    'saturation': 20000,          # 真机红外到约 20000 仍有效，过曝像素读数 65535 且无效
     'edge_jump': [0.03, 0.015],   # 四个方向二阶差分 > 2·max(a, b·d) 视为混合像素
     # 断层两侧的无效带：半宽 = a + b·d（像素，d 米）+ 沿边缘缓变的随机量 + 逐像素毛刺；
     # 按真机 test 序列标定（台阶边缘无效段宽度中位数：近处 5–6 px，>3 m 约 11 px）
     'edge_halfwidth_px': [0.3, 0.4],
     'edge_width_noise_px': 1.3,
     'edge_jitter_px': 0.7,
-    # 多路径：漫反射间接光路程分布宽，高调制频率下相量大部分抵消，只剩 γ 的比例；
-    # 偏差 = mpi_bias_m · γm/(1+γm)（m = 间接/直接光强比，mpi_bias_m ≈ λ/(4π)·0.5，λ≈1.5 m）
-    'mpi_gamma': 0.1,
-    'mpi_bias_m': 0.06,
-    'mpi_invalid': 0.8,           # γm 超过此值时判无效
+    # 内凹棱角（法线夹角 > corner_angle_deg）：偏差 = corner_bias_mm · exp(-d / corner_decay_m)，d 为沿表面到棱线的距离；
+    # 真机分段中位数 0–1 cm −22，1–2 cm −17，2–4 cm −11，4–7 cm −5 mm，7 cm 外约 0
+    'corner_bias_mm': -26.0,
+    'corner_decay_m': 0.035,
+    'corner_angle_deg': 30.0,
     'glass_transmission': 0.85,   # 单程透过率
-    'glass_specular_cos': 0.97,   # 入射角余弦高于此值时玻璃镜面反射过曝
+    'specular_cos': 0.999,        # 玻璃/镜面入射角余弦高于此值时发射器镜面反射过曝（约 2.5°）
+    'mirror_reflectance': 0.9,    # 镜面单次反射率（850 nm）
+    'mirror_rho': 0.4,            # 镜中物体的红外反射率（未逐物体取值）
     'ir_gain': 2.0, 'ir_read_noise': 10.0,
     'rho_ir_overrides': {'leaf': 0.55, 'textile_min': 0.4},
 }
@@ -64,6 +72,42 @@ def rho_ir_table(labels, max_id):
         elif inst['scannet200'] in TEXTILE:
             table[i] = -PARAMS['rho_ir_overrides']['textile_min']
     return table
+
+
+def concave_pairs(P, n, valid, z, step):
+    """相隔 2·step 像素的两点法线夹角大、深度连续，且互在对方平面之前（内凹）。"""
+    H, W = z.shape
+    cmax = np.cos(np.radians(PARAMS['corner_angle_deg']))
+    pad = lambda a: np.pad(a, ((step, step), (step, step)) + ((0, 0),) * (a.ndim - 2), mode='edge')   # noqa: E731
+    Pp, Np, Vp = pad(P), pad(n), pad(valid)
+    out = np.zeros((H, W), bool)
+    for dy, dx in ((0, 1), (1, 0), (1, 1), (1, -1)):
+        sl_a = (slice(step - dy * step, step - dy * step + H), slice(step - dx * step, step - dx * step + W))
+        sl_b = (slice(step + dy * step, step + dy * step + H), slice(step + dx * step, step + dx * step + W))
+        a, b, na, nb = Pp[sl_a], Pp[sl_b], Np[sl_a], Np[sl_b]
+        ab = b - a
+        out |= (Vp[sl_a] & Vp[sl_b] & ((na * nb).sum(2) < cmax) & (np.abs(ab[..., 2]) < 0.02 + 0.05 * z)
+                & ((ab * na).sum(2) > 0) & ((-ab * nb).sum(2) > 0))
+    return out
+
+
+def corner_bias(z, xn, n_cam, ray, cos, valid, f):
+    """内凹棱角的深度偏差（米）。棱线取相邻像素即判为内凹的细线，且在更大尺度上仍内凹
+    （尺度约 3–6 cm，排除门缝、把手槽等小凹槽；真机只测过房间墙角这类大棱角）。"""
+    P = np.dstack([xn * z[..., None], z])
+    n = n_cam * -np.sign((n_cam * ray).sum(2, keepdims=True))    # 法线朝向相机
+    large = np.zeros(z.shape, bool)
+    for s in (4, 8, 16, 32, 64):                               # 按深度选步长，使 s·z/f 落在 3–6 cm
+        large |= concave_pairs(P, n, valid, z, s) & (s * z / f >= 0.03) & (s * z / f < 0.06)
+    large = cv2.dilate(large.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    crease = concave_pairs(P, n, valid, z, 1) & large
+    if not crease.any():
+        return np.zeros_like(z)
+    dist_px, lab = cv2.distanceTransformWithLabels((~crease).astype(np.uint8), cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL)
+    z_cr = np.concatenate([[0], z[crease]])[lab]              # 最近棱线像素的深度（标签按行优先顺序编号）
+    d_m = dist_px * z / f / np.maximum(cos, 0.3)
+    same = np.abs(z - z_cr) < 0.02 + 2 * d_m                  # 同一结构（不跨越前景物体）
+    return np.where(valid & same, PARAMS['corner_bias_mm'] / 1000 * np.exp(-d_m / PARAMS['corner_decay_m']), 0)
 
 
 def simulate(view, rig, cal, labels, rng):
@@ -94,6 +138,7 @@ def simulate(view, rig, cal, labels, rng):
     cos = np.clip(np.abs((n_cam * ray).sum(2)), 0, 1)
     rng_m = z * rlen
     sky = (z <= 0) | (z > 1e3)
+    sky_geo = sky.copy()
 
     # Cycles 辐亮度换算到 ρ·cos/r² 单位：用纯漫反射直接光拟合比例
     lum = lambda a: lin(a) @ LUM                           # noqa: E731
@@ -103,8 +148,6 @@ def simulate(view, rig, cal, labels, rng):
     scale = np.median(analytic[good] / ddir[good])
     diffuse = (lin(p['DiffCol'] * (p['DiffDir'] + p['DiffInd'])) @ LUM)
     other = (lin(p['GlossCol'] * (p['GlossDir'] + p['GlossInd']) + p['TransCol'] * (p['TransDir'] + p['TransInd'])) @ LUM)
-    direct = lin(p['DiffCol'] * p['DiffDir'] + p['GlossCol'] * p['GlossDir'] + p['TransCol'] * p['TransDir']) @ LUM
-    indirect = lin(p['DiffCol'] * p['DiffInd'] + p['GlossCol'] * p['GlossInd'] + p['TransCol'] * p['TransInd']) @ LUM
 
     # 850 nm 反射率修正（只作用于漫反射部分）
     table = rho_ir_table(labels, max(int(idx.max()), 1))
@@ -123,14 +166,26 @@ def simulate(view, rig, cal, labels, rng):
     z_meas = np.where(glass, z_through, z)
     r_bg = z_through * rlen
     S = np.where(glass, k * E * 0.35 / np.maximum(r_bg, 1e-3) ** 2 * PARAMS['glass_transmission'] ** 2, S)
-    reason[glass & (cos > PARAMS['glass_specular_cos'])] = 6
+    specular = glass & (cos > PARAMS['specular_cos'])
 
-    # 多路径偏差
-    m = cv2.GaussianBlur(indirect / np.maximum(direct, 1e-6 * k), (0, 0), 3)
-    m = np.where(glass | sky, 0, np.clip(m, 0, 10))
-    gm = PARAMS['mpi_gamma'] * m
-    z_meas = z_meas + PARAMS['mpi_bias_m'] * gm / (1 + gm)
-    reason[(gm > PARAMS['mpi_invalid']) & (reason == 0)] = 5
+    # 镜子：测到虚像；Cycles 点光源无法经镜面照亮物体（焦散），信号按展开路程解析估计
+    mirror = np.zeros((H, W), bool)
+    if (view / 'mirror.npz').exists():
+        mz = np.load(view / 'mirror.npz')
+        nb = near(mz['bounces'].astype(np.float32))
+        mirror = (nb > 0) & mask
+        m_r = near(mz['range'])
+        escaped = mirror & ~np.isfinite(m_r)                  # 反射后射向室外/无穷远：无回波
+        m_r = np.where(np.isfinite(m_r), m_r, 0)
+        z_meas = np.where(mirror, m_r / rlen, z_meas)
+        S_m = k * E * PARAMS['mirror_rho'] * PARAMS['mirror_reflectance'] ** (2 * nb) * near(mz['cos_end']) / np.maximum(m_r, 1e-3) ** 2
+        S = np.where(mirror, np.where(escaped, 0, S_m), S)
+        specular |= mirror & (nb == 1) & (near(mz['cos_mirror']) > PARAMS['specular_cos'])
+        sky = (sky & ~mirror) | escaped
+    reason[specular] = 6
+
+    # 内凹棱角偏差（镜子、玻璃除外）
+    z_meas = z_meas + corner_bias(z, xn, n_cam, ray, cos, mask & ~sky & ~glass & ~mirror, K[0, 0])
     z_clean = np.where(sky, 0, z_meas).astype(np.float32)     # 加噪前，用于判断边缘
 
     # 随机噪声
@@ -138,10 +193,8 @@ def simulate(view, rig, cal, labels, rng):
     z_meas = z_meas + rng.normal(size=z.shape) * sigma
 
     # 无效像素
-    lo, hi = PARAMS['low_signal_ratio']
-    sr = S / s_ref
-    p_low = np.clip((hi - sr) / (hi - lo), 0, 1)
-    reason[(rng.random(z.shape) < p_low) & (reason == 0)] = 2
+    p_valid = 1 / (1 + (PARAMS['low_signal_ir50'] / np.maximum(S, 1e-6)) ** PARAMS['low_signal_slope'])
+    reason[(rng.random(z.shape) >= p_valid) & (reason == 0)] = 2
     reason[(S > PARAMS['saturation']) & (reason == 0)] = 3
     zf = z_clean
     # 二阶差分：平面（含掠射角）≈ 0，只有深度断层才超阈值；天空按极远处理
@@ -162,10 +215,10 @@ def simulate(view, rig, cal, labels, rng):
     reason[~mask] = 1
 
     depth = np.where(reason == 0, np.round(z_meas * 1000), 0).clip(0, 65535).astype(np.uint16)
-    gt = np.where(mask & ~sky, np.round(z * 1000), 0).clip(0, 65535).astype(np.uint16)
-    ir_sig = np.where(glass & (cos > PARAMS['glass_specular_cos']), PARAMS['saturation'], S)
-    ir = ir_sig + rng.normal(size=S.shape) * np.sqrt(PARAMS['ir_gain'] * np.maximum(ir_sig, 0) + PARAMS['ir_read_noise'] ** 2)
-    ir = np.where(mask, ir.clip(0, PARAMS['saturation']), 0).astype(np.uint16)
+    gt = np.where(mask & ~sky_geo, np.round(z * 1000), 0).clip(0, 65535).astype(np.uint16)
+    ir = S + rng.normal(size=S.shape) * np.sqrt(PARAMS['ir_gain'] * np.maximum(S, 0) + PARAMS['ir_read_noise'] ** 2)
+    ir = np.where((ir > PARAMS['saturation']) | specular, 65535, ir.clip(0, PARAMS['saturation']))   # 过曝读数 65535
+    ir = np.where(mask, ir, 0).astype(np.uint16)
 
     # 投影到彩色相机（z-buffer 取最近）
     Kc = np.array(rig['color']['K'])
@@ -186,7 +239,8 @@ def simulate(view, rig, cal, labels, rng):
     err = (depth.astype(np.float32) - gt) * (depth > 0)
     inm = mask & ~sky
     stats = {'valid_in_mask': float((depth > 0)[inm].mean()),
-             'reasons_in_mask': {str(c): float((reason[inm] == c).mean()) for c in range(2, 7)},
+             'reasons_in_mask': {str(c): float((reason[inm] == c).mean()) for c in (2, 3, 4, 6)},
+             'mirror_px': int(mirror.sum()), 'mirror_valid': float((depth > 0)[mirror].mean()) if mirror.any() else None,
              'abs_err_median_mm': float(np.median(np.abs(err[depth > 0]))),
              'sigma_median_mm': float(np.median(sigma[depth > 0]) * 1000), 'cycles_scale': float(scale)}
     return stats, dict(depth=depth, gt=gt, ir=ir, reason=reason, err=err, mask=mask)
@@ -254,7 +308,7 @@ def preview(out, results, real_root):
     for i, t in enumerate(titles):
         dr.text((8, th + i * (360 + rh) + 4), t, font=fs, fill=(220, 220, 220))
     dr.text((8, im.height - 30), 'Depth colormap 0.5-5 m (turbo). Error: blue = too near, red = too far. Reasons: grey valid, '
-            'magenta low signal, white saturated, yellow edge, orange multipath, blue glass specular.', font=fs, fill=(200, 200, 200))
+            'magenta low signal, white saturated, yellow edge, blue glass/mirror specular hotspot.', font=fs, fill=(200, 200, 200))
     im.save(out / 'dk_preview.jpg', quality=90)
     print('PREVIEW', out / 'dk_preview.jpg')
 

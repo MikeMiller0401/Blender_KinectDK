@@ -37,13 +37,18 @@ Calibrated from a real DK (NFOV unbinned 640×576 + 720p color; factory calibrat
 # 1) once: fit valid-area mask, IR falloff, noise from real recordings -> dk_params.npz/json (needs numpy + cv2)
 python3 output/kinect_dk/calibrate_dk.py /path/to/AzureKinectDK/output
 # 2) render color + IR/depth-camera passes (blend file is not modified)
-blender -b apartment.blend --python output/kinect_dk/render_kinect.py -- OUT [--views name=x,y,z,lx,ly,lz;...]
-# 3) add sensor effects (noise, multipath, glass, edge dropout, low signal); seconds, no re-render
+blender -b apartment.blend --python output/kinect_dk/render_kinect.py -- OUT [--views name=x,y,z,lx,ly,lz;... | mirrors]
+# 3) add sensor effects (noise, corners, glass, mirrors, edge dropout, low signal); seconds, no re-render
 python3 output/kinect_dk/kinect_sim.py OUT [--preview]
 ```
 Per view: `depth.png` (uint16 mm, 0 = invalid), `ir.png`, `depth_gt.png`, `depth_to_color.png`,
-`invalid_reason.png` (1 outside FoV, 2 low signal, 3 saturated, 4 edge, 5 multipath, 6 glass); `rig.json` has K, distortion, extrinsics.
-Model parameters are in `PARAMS` of `kinect_sim.py`. Multipath, saturation and IR noise are still estimates.
+`invalid_reason.png` (1 outside FoV, 2 low signal, 3 saturated, 4 edge, 6 glass/mirror emitter hotspot); `rig.json` has K, distortion, extrinsics.
+Model parameters are in `PARAMS` of `kinect_sim.py`, checked against real recordings:
+- concave corners read nearer than the true geometry (−26 mm at the crease, decaying over ~3.5 cm) and stay valid;
+- mirrors return the virtual-image depth (unfolded reflected path). Signal falls with the round-trip length, and a frontal view saturates at the emitter hotspot;
+- the probability of a valid pixel follows the IR signal (50 % at ~28 DN); saturation above ~20000 DN reads 65535 and is invalid.
+
+Corner and mirror behaviour is fitted from a small set of close-range (0.5–2 m) recordings. `depth_gt.png` is the true geometry (mirror surface, not the virtual image).
 
 Kitchen test (4 views). Columns: DK colour, simulated IR, GT depth, simulated depth, error, invalid reason.
 Bottom row: our real DK for reference (office, IR and depth from the same frame; RGB omitted, face blurred).
