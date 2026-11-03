@@ -46,7 +46,7 @@ Per view: `depth.png` (uint16 mm, 0 = invalid), `ir.png`, `depth_gt.png`, `depth
 Model parameters are in `PARAMS` of `kinect_sim.py`, checked against real recordings:
 - concave corners read nearer than the true geometry (−26 mm at the crease, decaying over ~3.5 cm) and stay valid;
 - mirrors return the virtual-image depth (unfolded reflected path). Signal falls with the round-trip length, and a frontal view saturates at the emitter hotspot;
-- the probability of a valid pixel follows the IR signal (50 % at ~28 DN); saturation above ~20000 DN reads 65535 and is invalid.
+- the probability of a valid pixel follows the IR signal (50 % at ~28 DN), with dropouts in small blobs; saturation above ~20000 DN reads 65535 and is invalid.
 
 Corner and mirror behaviour is fitted from a small set of close-range (0.5–2 m) recordings. `depth_gt.png` is the true geometry (mirror surface, not the virtual image).
 

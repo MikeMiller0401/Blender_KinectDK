@@ -36,6 +36,7 @@ PARAMS = {
     # IR 0–10 → 3%，10–20 → 17%，20–40 → 48%，40–60 → 81%，100–150 → 95%（新设备墙面录像低 IR 像素都在视场边缘，不采用）
     'low_signal_ir50': 28.0,
     'low_signal_slope': 2.5,
+    'low_signal_blob_px': 2.0,    # 低信号缺失的空间相关尺度（高斯 σ，像素）
     'saturation': 20000,          # 真机红外到约 20000 仍有效，过曝像素读数 65535 且无效
     'edge_jump': [0.03, 0.015],   # 四个方向二阶差分 > 2·max(a, b·d) 视为混合像素
     # 断层两侧的无效带：半宽 = a + b·d（像素，d 米）+ 沿边缘缓变的随机量 + 逐像素毛刺；
@@ -194,7 +195,11 @@ def simulate(view, rig, cal, labels, rng):
 
     # 无效像素
     p_valid = 1 / (1 + (PARAMS['low_signal_ir50'] / np.maximum(S, 1e-6)) ** PARAMS['low_signal_slope'])
-    reason[(rng.random(z.shape) >= p_valid) & (reason == 0)] = 2
+    # 真机低信号缺失成片出现：用空间相关的噪声按排名变成均匀分布再比较
+    g = cv2.GaussianBlur(rng.normal(size=z.shape).astype(np.float32), (0, 0), PARAMS['low_signal_blob_px'])
+    u = np.empty(g.size, np.float32)
+    u[np.argsort(g, axis=None)] = (np.arange(g.size) + 0.5) / g.size
+    reason[(u.reshape(z.shape) >= p_valid) & (reason == 0)] = 2
     reason[(S > PARAMS['saturation']) & (reason == 0)] = 3
     zf = z_clean
     # 二阶差分：平面（含掠射角）≈ 0，只有深度断层才超阈值；天空按极远处理
